@@ -1,0 +1,674 @@
+# ==========================================================
+#  FogSky - mod Fabric 1.21.10: ubah warna fog & langit
+#  Simpan file ini sebagai:  .github/workflows/build.yml
+#  Semua source code mod dibuat otomatis oleh workflow ini.
+# ==========================================================
+name: Build FogSky Mod
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pasang Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Pasang Gradle 8.14.3
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.14.3
+
+      - name: Buat file source mod
+        run: |
+          set -e
+          mkdir -p mod
+          cd mod
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  maven { url = 'https://maven.fabricmc.net/' }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          rootProject.name = 'fogsky'
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2G
+          org.gradle.parallel=true
+
+          minecraft_version=1.21.10
+          loader_version=0.17.3
+          modmenu_version=16.0.1
+
+          mod_version=1.0.0
+          maven_group=com.fogsky
+          archives_base_name=fogsky
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'fabric-loom' version '1.11-SNAPSHOT'
+          }
+
+          version = project.mod_version
+          group = project.maven_group
+
+          base {
+              archivesName = project.archives_base_name
+          }
+
+          repositories {
+              maven {
+                  url = 'https://maven.terraformersmc.com/'
+                  metadataSources {
+                      mavenPom()
+                      artifact()
+                  }
+              }
+          }
+
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings loom.officialMojangMappings()
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
+          }
+
+          java {
+              withSourcesJar()
+              sourceCompatibility = JavaVersion.VERSION_21
+              targetCompatibility = JavaVersion.VERSION_21
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              options.release = 21
+              options.encoding = 'UTF-8'
+          }
+          EOF
+
+          mkdir -p src/main/resources
+          cat > src/main/resources/fabric.mod.json <<'EOF'
+          {
+            "schemaVersion": 1,
+            "id": "fogsky",
+            "version": "1.0.0",
+            "name": "Fog & Sky Color",
+            "description": "Ubah warna fog dan langit lewat Mod Menu dengan color picker.",
+            "authors": ["kamu"],
+            "license": "MIT",
+            "environment": "client",
+            "entrypoints": {
+              "client": ["com.fogsky.FogSkyClient"],
+              "modmenu": ["com.fogsky.FogSkyModMenu"]
+            },
+            "mixins": ["fogsky.mixins.json"],
+            "depends": {
+              "fabricloader": ">=0.17.0",
+              "minecraft": ">=1.21.9 <1.22",
+              "java": ">=21"
+            },
+            "suggests": {
+              "modmenu": "*"
+            }
+          }
+          EOF
+
+          mkdir -p src/main/resources
+          cat > src/main/resources/fogsky.mixins.json <<'EOF'
+          {
+            "required": true,
+            "minVersion": "0.8",
+            "package": "com.fogsky.mixin",
+            "compatibilityLevel": "JAVA_21",
+            "client": [
+              "ClientLevelMixin",
+              "FogRendererMixin"
+            ],
+            "injectors": {
+              "defaultRequire": 1
+            }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky
+          cat > src/main/java/com/fogsky/FogSkyClient.java <<'EOF'
+          package com.fogsky;
+
+          import net.fabricmc.api.ClientModInitializer;
+
+          public class FogSkyClient implements ClientModInitializer {
+              @Override
+              public void onInitializeClient() {
+                  FogSkyConfig.load();
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky
+          cat > src/main/java/com/fogsky/FogSkyModMenu.java <<'EOF'
+          package com.fogsky;
+
+          import com.terraformersmc.modmenu.api.ConfigScreenFactory;
+          import com.terraformersmc.modmenu.api.ModMenuApi;
+
+          public class FogSkyModMenu implements ModMenuApi {
+              @Override
+              public ConfigScreenFactory<?> getModConfigScreenFactory() {
+                  return parent -> new MainScreen(parent);
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky
+          cat > src/main/java/com/fogsky/FogSkyConfig.java <<'EOF'
+          package com.fogsky;
+
+          import net.fabricmc.loader.api.FabricLoader;
+
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.nio.file.Files;
+          import java.nio.file.Path;
+          import java.util.Properties;
+
+          public final class FogSkyConfig {
+              public static final int DEFAULT_FOG = 0xC0D8FF;
+              public static final int DEFAULT_SKY = 0x78A7FF;
+
+              public static boolean fogEnabled = false;
+              public static int fogColor = DEFAULT_FOG;
+              public static boolean fogFollowTime = true;
+
+              public static boolean skyEnabled = false;
+              public static int skyColor = DEFAULT_SKY;
+              public static boolean skyFollowTime = true;
+
+              private FogSkyConfig() {
+              }
+
+              private static Path file() {
+                  return FabricLoader.getInstance().getConfigDir().resolve("fogsky.properties");
+              }
+
+              public static void load() {
+                  Path p = file();
+                  if (!Files.exists(p)) {
+                      return;
+                  }
+                  try (InputStream in = Files.newInputStream(p)) {
+                      Properties pr = new Properties();
+                      pr.load(in);
+                      fogEnabled = Boolean.parseBoolean(pr.getProperty("fogEnabled", "false"));
+                      fogColor = parseColor(pr.getProperty("fogColor"), DEFAULT_FOG);
+                      fogFollowTime = Boolean.parseBoolean(pr.getProperty("fogFollowTime", "true"));
+                      skyEnabled = Boolean.parseBoolean(pr.getProperty("skyEnabled", "false"));
+                      skyColor = parseColor(pr.getProperty("skyColor"), DEFAULT_SKY);
+                      skyFollowTime = Boolean.parseBoolean(pr.getProperty("skyFollowTime", "true"));
+                  } catch (Exception e) {
+                      System.err.println("[FogSky] gagal baca config: " + e);
+                  }
+              }
+
+              public static void save() {
+                  Properties pr = new Properties();
+                  pr.setProperty("fogEnabled", String.valueOf(fogEnabled));
+                  pr.setProperty("fogColor", String.format("%06X", fogColor & 0xFFFFFF));
+                  pr.setProperty("fogFollowTime", String.valueOf(fogFollowTime));
+                  pr.setProperty("skyEnabled", String.valueOf(skyEnabled));
+                  pr.setProperty("skyColor", String.format("%06X", skyColor & 0xFFFFFF));
+                  pr.setProperty("skyFollowTime", String.valueOf(skyFollowTime));
+                  try (OutputStream out = Files.newOutputStream(file())) {
+                      pr.store(out, "FogSky config (warna dalam hex RRGGBB)");
+                  } catch (Exception e) {
+                      System.err.println("[FogSky] gagal simpan config: " + e);
+                  }
+              }
+
+              private static int parseColor(String s, int def) {
+                  try {
+                      return Integer.parseInt(s.trim(), 16) & 0xFFFFFF;
+                  } catch (Exception e) {
+                      return def;
+                  }
+              }
+
+              /** 0..1 dari warna asli vanilla: kecil saat malam / hujan, 1 saat siang cerah. */
+              public static float timeFactor(float r, float g, float b) {
+                  return Math.min(1f, Math.max(r, Math.max(g, b)));
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky
+          cat > src/main/java/com/fogsky/MainScreen.java <<'EOF'
+          package com.fogsky;
+
+          import net.minecraft.client.gui.GuiGraphics;
+          import net.minecraft.client.gui.components.Button;
+          import net.minecraft.client.gui.screens.Screen;
+          import net.minecraft.network.chat.Component;
+
+          public class MainScreen extends Screen {
+              private final Screen parent;
+
+              public MainScreen(Screen parent) {
+                  super(Component.literal("Fog & Langit"));
+                  this.parent = parent;
+              }
+
+              @Override
+              protected void init() {
+                  int cx = this.width / 2;
+                  int y = this.height / 2 - 30;
+
+                  this.addRenderableWidget(Button.builder(Component.literal("Warna Fog"),
+                          b -> this.minecraft.setScreen(new ColorScreen(this, true)))
+                          .bounds(cx - 100, y, 200, 20).build());
+
+                  this.addRenderableWidget(Button.builder(Component.literal("Warna Langit"),
+                          b -> this.minecraft.setScreen(new ColorScreen(this, false)))
+                          .bounds(cx - 100, y + 26, 200, 20).build());
+
+                  this.addRenderableWidget(Button.builder(Component.literal("Selesai"),
+                          b -> this.onClose())
+                          .bounds(cx - 100, y + 60, 200, 20).build());
+              }
+
+              @Override
+              public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+                  super.render(g, mouseX, mouseY, partialTick);
+                  g.drawCenteredString(this.font, this.title, this.width / 2, this.height / 2 - 52, 0xFFFFFFFF);
+              }
+
+              @Override
+              public void onClose() {
+                  FogSkyConfig.save();
+                  this.minecraft.setScreen(this.parent);
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky
+          cat > src/main/java/com/fogsky/ColorScreen.java <<'EOF'
+          package com.fogsky;
+
+          import net.minecraft.client.gui.GuiGraphics;
+          import net.minecraft.client.gui.components.Button;
+          import net.minecraft.client.gui.screens.Screen;
+          import net.minecraft.client.input.MouseButtonEvent;
+          import net.minecraft.network.chat.Component;
+
+          public class ColorScreen extends Screen {
+              private static final int BOX = 96;
+              private static final int HUE_W = 12;
+              private static final int PANEL_W = 120;
+
+              private final Screen parent;
+              private final boolean fog;
+
+              private float h;
+              private float s;
+              private float v;
+              private int dragging = 0; // 1 = kotak warna, 2 = bar hue
+
+              private int bx;
+              private int by;
+              private int hx;
+              private int px;
+
+              private Button enabledBtn;
+              private Button timeBtn;
+
+              public ColorScreen(Screen parent, boolean fog) {
+                  super(Component.literal(fog ? "Warna Fog" : "Warna Langit"));
+                  this.parent = parent;
+                  this.fog = fog;
+                  setFromRgb(fog ? FogSkyConfig.fogColor : FogSkyConfig.skyColor);
+              }
+
+              @Override
+              protected void init() {
+                  int total = BOX + 6 + HUE_W + 10 + PANEL_W;
+                  int top = Math.max(6, (this.height - 140) / 2);
+                  this.bx = (this.width - total) / 2;
+                  this.by = top + 16;
+                  this.hx = this.bx + BOX + 6;
+                  this.px = this.hx + HUE_W + 10;
+
+                  this.enabledBtn = Button.builder(Component.literal(""), b -> {
+                      setEnabled(!isEnabled());
+                      refreshButtons();
+                  }).bounds(this.px, this.by + 34, PANEL_W, 20).build();
+                  this.addRenderableWidget(this.enabledBtn);
+
+                  this.timeBtn = Button.builder(Component.literal(""), b -> {
+                      setFollowTime(!isFollowTime());
+                      refreshButtons();
+                  }).bounds(this.px, this.by + 56, PANEL_W, 20).build();
+                  this.addRenderableWidget(this.timeBtn);
+
+                  this.addRenderableWidget(Button.builder(Component.literal("Reset"), b -> {
+                      setFromRgb(this.fog ? FogSkyConfig.DEFAULT_FOG : FogSkyConfig.DEFAULT_SKY);
+                      storeColor();
+                      setEnabled(false);
+                      refreshButtons();
+                  }).bounds(this.px, this.by + 78, PANEL_W, 20).build());
+
+                  this.addRenderableWidget(Button.builder(Component.literal("Selesai"), b -> this.onClose())
+                          .bounds(this.width / 2 - 100, this.by + BOX + 10, 200, 20).build());
+
+                  refreshButtons();
+              }
+
+              private boolean isEnabled() {
+                  return this.fog ? FogSkyConfig.fogEnabled : FogSkyConfig.skyEnabled;
+              }
+
+              private void setEnabled(boolean value) {
+                  if (this.fog) {
+                      FogSkyConfig.fogEnabled = value;
+                  } else {
+                      FogSkyConfig.skyEnabled = value;
+                  }
+              }
+
+              private boolean isFollowTime() {
+                  return this.fog ? FogSkyConfig.fogFollowTime : FogSkyConfig.skyFollowTime;
+              }
+
+              private void setFollowTime(boolean value) {
+                  if (this.fog) {
+                      FogSkyConfig.fogFollowTime = value;
+                  } else {
+                      FogSkyConfig.skyFollowTime = value;
+                  }
+              }
+
+              private void refreshButtons() {
+                  if (this.enabledBtn != null) {
+                      this.enabledBtn.setMessage(Component.literal("Aktif: " + (isEnabled() ? "ON" : "OFF")));
+                  }
+                  if (this.timeBtn != null) {
+                      this.timeBtn.setMessage(Component.literal("Ikuti waktu: " + (isFollowTime() ? "ON" : "OFF")));
+                  }
+              }
+
+              private void storeColor() {
+                  int rgb = hsvToRgb(this.h, this.s, this.v);
+                  if (this.fog) {
+                      FogSkyConfig.fogColor = rgb;
+                  } else {
+                      FogSkyConfig.skyColor = rgb;
+                  }
+              }
+
+              private void apply() {
+                  storeColor();
+                  setEnabled(true);
+                  refreshButtons();
+              }
+
+              @Override
+              public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+                  super.render(g, mouseX, mouseY, partialTick);
+                  g.drawCenteredString(this.font, this.title, this.width / 2, this.by - 14, 0xFFFFFFFF);
+
+                  // kotak saturasi (kiri-kanan) x kecerahan (atas-bawah)
+                  g.fill(this.bx - 1, this.by - 1, this.bx + BOX + 1, this.by + BOX + 1, 0xFFFFFFFF);
+                  for (int i = 0; i < BOX; i += 2) {
+                      float sat = (i + 1) / (float) BOX;
+                      int topColor = 0xFF000000 | hsvToRgb(this.h, sat, 1f);
+                      g.fillGradient(this.bx + i, this.by, this.bx + i + 2, this.by + BOX, topColor, 0xFF000000);
+                  }
+
+                  int rgb = hsvToRgb(this.h, this.s, this.v);
+                  int dx = this.bx + Math.round(this.s * (BOX - 1));
+                  int dy = this.by + Math.round((1f - this.v) * (BOX - 1));
+                  g.fill(dx - 4, dy - 4, dx + 5, dy + 5, 0xFFFFFFFF);
+                  g.fill(dx - 3, dy - 3, dx + 4, dy + 4, 0xFF000000);
+                  g.fill(dx - 2, dy - 2, dx + 3, dy + 3, 0xFF000000 | rgb);
+
+                  // bar hue
+                  g.fill(this.hx - 1, this.by - 1, this.hx + HUE_W + 1, this.by + BOX + 1, 0xFFFFFFFF);
+                  for (int i = 0; i < BOX; i++) {
+                      g.fill(this.hx, this.by + i, this.hx + HUE_W, this.by + i + 1,
+                              0xFF000000 | hsvToRgb(i / (float) BOX, 1f, 1f));
+                  }
+                  int hy = this.by + Math.round(this.h * (BOX - 1));
+                  g.fill(this.hx - 2, hy - 2, this.hx + HUE_W + 2, hy + 3, 0xFFFFFFFF);
+                  g.fill(this.hx - 1, hy - 1, this.hx + HUE_W + 1, hy + 2, 0xFF000000);
+
+                  // pratinjau warna + kode hex
+                  g.fill(this.px - 1, this.by - 1, this.px + PANEL_W + 1, this.by + 21, 0xFFFFFFFF);
+                  g.fill(this.px, this.by, this.px + PANEL_W, this.by + 20, 0xFF000000 | rgb);
+                  g.drawString(this.font, String.format("#%06X", rgb), this.px, this.by + 24, 0xFFFFFFFF);
+              }
+
+              @Override
+              public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+                  if (event.button() == 0) {
+                      double mx = event.x();
+                      double my = event.y();
+                      if (mx >= this.bx && mx < this.bx + BOX && my >= this.by && my < this.by + BOX) {
+                          this.dragging = 1;
+                          pick(mx, my);
+                          return true;
+                      }
+                      if (mx >= this.hx && mx < this.hx + HUE_W && my >= this.by && my < this.by + BOX) {
+                          this.dragging = 2;
+                          pick(mx, my);
+                          return true;
+                      }
+                  }
+                  return super.mouseClicked(event, doubleClick);
+              }
+
+              @Override
+              public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
+                  if (this.dragging != 0) {
+                      pick(event.x(), event.y());
+                      return true;
+                  }
+                  return super.mouseDragged(event, dx, dy);
+              }
+
+              @Override
+              public boolean mouseReleased(MouseButtonEvent event) {
+                  this.dragging = 0;
+                  return super.mouseReleased(event);
+              }
+
+              private void pick(double mx, double my) {
+                  if (this.dragging == 1) {
+                      this.s = clamp01((mx - this.bx) / (BOX - 1));
+                      this.v = 1f - clamp01((my - this.by) / (BOX - 1));
+                  } else if (this.dragging == 2) {
+                      this.h = clamp01((my - this.by) / (BOX - 1));
+                  }
+                  apply();
+              }
+
+              private static float clamp01(double x) {
+                  return (float) Math.max(0.0, Math.min(1.0, x));
+              }
+
+              @Override
+              public void onClose() {
+                  FogSkyConfig.save();
+                  this.minecraft.setScreen(this.parent);
+              }
+
+              private void setFromRgb(int rgb) {
+                  float r = ((rgb >> 16) & 255) / 255f;
+                  float g = ((rgb >> 8) & 255) / 255f;
+                  float b = (rgb & 255) / 255f;
+                  float max = Math.max(r, Math.max(g, b));
+                  float min = Math.min(r, Math.min(g, b));
+                  float d = max - min;
+                  this.v = max;
+                  this.s = max == 0f ? 0f : d / max;
+                  float hue;
+                  if (d == 0f) {
+                      hue = 0f;
+                  } else if (max == r) {
+                      hue = ((g - b) / d) % 6f;
+                  } else if (max == g) {
+                      hue = (b - r) / d + 2f;
+                  } else {
+                      hue = (r - g) / d + 4f;
+                  }
+                  hue /= 6f;
+                  if (hue < 0f) {
+                      hue += 1f;
+                  }
+                  this.h = hue;
+              }
+
+              static int hsvToRgb(float h, float s, float v) {
+                  h = h - (float) Math.floor(h);
+                  float hh = h * 6f;
+                  int i = (int) Math.floor(hh);
+                  float f = hh - i;
+                  float p = v * (1f - s);
+                  float q = v * (1f - s * f);
+                  float t = v * (1f - s * (1f - f));
+                  float r;
+                  float g;
+                  float b;
+                  switch (i % 6) {
+                      case 0: r = v; g = t; b = p; break;
+                      case 1: r = q; g = v; b = p; break;
+                      case 2: r = p; g = v; b = t; break;
+                      case 3: r = p; g = q; b = v; break;
+                      case 4: r = t; g = p; b = v; break;
+                      default: r = v; g = p; b = q; break;
+                  }
+                  return (Math.round(r * 255f) << 16) | (Math.round(g * 255f) << 8) | Math.round(b * 255f);
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky/mixin
+          cat > src/main/java/com/fogsky/mixin/ClientLevelMixin.java <<'EOF'
+          package com.fogsky.mixin;
+
+          import com.fogsky.FogSkyConfig;
+          import net.minecraft.client.multiplayer.ClientLevel;
+          import net.minecraft.world.level.Level;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+          @Mixin(ClientLevel.class)
+          public abstract class ClientLevelMixin {
+
+              @Inject(method = "getSkyColor", at = @At("RETURN"), cancellable = true)
+              private void fogsky$skyColor(CallbackInfoReturnable<Integer> cir) {
+                  if (!FogSkyConfig.skyEnabled) {
+                      return;
+                  }
+                  ClientLevel self = (ClientLevel) (Object) this;
+                  if (!Level.OVERWORLD.equals(self.dimension())) {
+                      return;
+                  }
+
+                  int orig = cir.getReturnValue();
+                  float f = 1f;
+                  if (FogSkyConfig.skyFollowTime) {
+                      f = FogSkyConfig.timeFactor(
+                              ((orig >> 16) & 255) / 255f,
+                              ((orig >> 8) & 255) / 255f,
+                              (orig & 255) / 255f);
+                  }
+
+                  int c = FogSkyConfig.skyColor;
+                  int r = Math.round(((c >> 16) & 255) * f);
+                  int g = Math.round(((c >> 8) & 255) * f);
+                  int b = Math.round((c & 255) * f);
+                  cir.setReturnValue(0xFF000000 | (r << 16) | (g << 8) | b);
+              }
+          }
+          EOF
+
+          mkdir -p src/main/java/com/fogsky/mixin
+          cat > src/main/java/com/fogsky/mixin/FogRendererMixin.java <<'EOF'
+          package com.fogsky.mixin;
+
+          import com.fogsky.FogSkyConfig;
+          import net.minecraft.client.Minecraft;
+          import net.minecraft.client.renderer.fog.FogRenderer;
+          import net.minecraft.tags.FluidTags;
+          import net.minecraft.world.level.Level;
+          import org.joml.Vector4f;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
+
+          @Mixin(FogRenderer.class)
+          public abstract class FogRendererMixin {
+
+              @Inject(method = "computeFogColor", at = @At("RETURN"), cancellable = true)
+              private void fogsky$fogColor(CallbackInfoReturnable<Vector4f> cir) {
+                  if (!FogSkyConfig.fogEnabled) {
+                      return;
+                  }
+                  Minecraft mc = Minecraft.getInstance();
+                  if (mc.level == null || !Level.OVERWORLD.equals(mc.level.dimension())) {
+                      return;
+                  }
+                  // fog di dalam air / lava tetap bawaan game
+                  if (mc.player != null
+                          && (mc.player.isEyeInFluid(FluidTags.WATER) || mc.player.isEyeInFluid(FluidTags.LAVA))) {
+                      return;
+                  }
+
+                  Vector4f orig = cir.getReturnValue();
+                  float f = 1f;
+                  if (FogSkyConfig.fogFollowTime) {
+                      f = FogSkyConfig.timeFactor(orig.x, orig.y, orig.z);
+                  }
+
+                  int c = FogSkyConfig.fogColor;
+                  float r = ((c >> 16) & 255) / 255f * f;
+                  float g = ((c >> 8) & 255) / 255f * f;
+                  float b = (c & 255) / 255f * f;
+                  cir.setReturnValue(new Vector4f(r, g, b, orig.w));
+              }
+          }
+          EOF
+
+      - name: Compile mod
+        working-directory: mod
+        run: gradle build --no-daemon --stacktrace
+
+      - name: Upload jar (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fogsky-mod
+          path: mod/build/libs/fogsky-1.0.0.jar
+
+      - name: Buat Release (jar langsung bisa didownload)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: FogSky build ${{ github.run_number }}
+          files: mod/build/libs/fogsky-1.0.0.jar
